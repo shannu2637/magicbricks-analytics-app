@@ -330,7 +330,7 @@ with tab3:
         st.info("No data for ROI calculation with current filters.")
     else:
         min_val = 5
-        max_val = max(min_val, min(30, len(roi)))
+        max_val = max(min_val + 1, min(30, len(roi)))
         default_val = min(max_val, 10)
         top_n = st.slider("Show top N localities", min_val, max_val, default_val)
         st.dataframe(roi.head(top_n).reset_index(drop=True), use_container_width=True)
