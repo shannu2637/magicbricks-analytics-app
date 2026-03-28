@@ -3,6 +3,8 @@ import pandas as pd
 import streamlit as st
 import plotly.express as px
 import plotly.graph_objects as go
+import joblib
+import json
  
 # ── Page config ────────────────────────────────────────────────────────────────
 st.set_page_config(
@@ -225,7 +227,7 @@ st.divider()
 # ══════════════════════════════════════════════════════════════════════════════
 # TABS
 # ══════════════════════════════════════════════════════════════════════════════
-tab1, tab2, tab3, tab4 = st.tabs(["📋 Listings", "📊 Analytics", "💰 ROI Finder", "🏗️ Developer Index"])
+tab1, tab2, tab3, tab4, tab5 = st.tabs(["📋 Listings", "📊 Analytics", "💰 ROI Finder", "🏗️ Developer Index", "🔮 Price Predictor"])
  
  
 # ──────────────────────────────────────────────────────────────────────────────
@@ -389,3 +391,135 @@ with tab4:
         )
         fig6.update_layout(showlegend=False, margin=dict(l=0, r=0, t=0, b=0), height=420)
         st.plotly_chart(fig6, use_container_width=True)
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# TAB 5 – PRICE PREDICTOR
+# ──────────────────────────────────────────────────────────────────────────────
+with tab5:
+    st.header("🔮 Property Price & EMI Predictor")
+    st.caption("Enter property details to predict the estimated price and monthly EMI.")
+    
+    # Load model and metadata
+    try:
+        model = joblib.load("model.pkl")
+        with open("model_meta.json", "r") as f:
+            model_meta = json.load(f)
+    except FileNotFoundError:
+        st.error("❌ Model files not found. Please ensure model.pkl and model_meta.json exist in the folder.")
+        st.stop()
+    
+    # Create input form
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        # City selection
+        available_cities = sorted(df["City"].unique())
+        selected_city = st.selectbox("🏙️ City", available_cities)
+        
+        # Get localities for selected city
+        city_localities = sorted(df[df["City"] == selected_city]["Locality"].unique())
+        selected_locality = st.selectbox("📍 Locality", city_localities)
+        
+        # BHK
+        bhk = st.number_input("🛏️ BHK", min_value=1, max_value=10, value=2, step=1)
+        
+        # Bathrooms
+        bathrooms = st.number_input("🚿 Bathrooms", min_value=1, max_value=10, value=2, step=1)
+    
+    with col2:
+        # Carpet Area (in sqft)
+        carpet_area = st.number_input("📐 Carpet Area (sqft)", min_value=100, max_value=50000, value=1000, step=100)
+        
+        # Balconies (optional)
+        balconies = st.number_input("🪟 Balconies", min_value=0, max_value=5, value=1, step=1)
+        
+        # Get developer for selected locality
+        available_devs = sorted(df[df["Locality"] == selected_locality]["Developer"].unique())
+        selected_developer = st.selectbox("🏗️ Developer", available_devs)
+    
+    st.divider()
+    
+    # Make prediction
+    if st.button("💡 Predict Price & EMI", use_container_width=True):
+        try:
+            # Calculate derived features (same as training)
+            carpet_to_bhk = carpet_area / bhk
+            carpet_to_bath = carpet_area / bathrooms
+            log_carpet = np.log1p(carpet_area)
+            
+            # Prepare input dataframe with EXACT column order from training
+            # Order: City, Locality, Developer (categorical), then numerical features
+            input_data = pd.DataFrame({
+                "City": [selected_city],
+                "Locality": [selected_locality],
+                "Developer": [selected_developer],
+                "BHK": [float(bhk)],
+                "Bathrooms": [float(bathrooms)],
+                "Balconies": [float(balconies)],
+                "Carpet Area": [float(carpet_area)],
+                "Carpet_to_bhk": [float(carpet_to_bhk)],
+                "Carpet_to_bath": [float(carpet_to_bath)],
+                "log_carpet": [float(log_carpet)],
+            })
+            
+            # Reorder columns to match training: categorical first, then numerical
+            categor_cols = ["City", "Locality", "Developer"]
+            num_cols = ["BHK", "Bathrooms", "Balconies", "Carpet Area", "Carpet_to_bhk", "Carpet_to_bath", "log_carpet"]
+            input_data = input_data[categor_cols + num_cols]
+            
+            # Make prediction
+            predicted_price_log = model.predict(input_data)[0]
+            predicted_price = np.expm1(predicted_price_log)  # Convert from log space back to actual price
+            
+            # Calculate EMI (assuming 9% annual interest for 20 years)
+            annual_rate = 0.09
+            monthly_rate = annual_rate / 12
+            num_months = 20 * 12
+            if monthly_rate > 0:
+                emi = (predicted_price * monthly_rate * (1 + monthly_rate)**num_months) / ((1 + monthly_rate)**num_months - 1)
+            else:
+                emi = predicted_price / num_months
+            
+            # Display results
+            st.success("✅ Prediction generated successfully!")
+            
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                st.metric(
+                    "💰 Estimated Price",
+                    fmt_price(predicted_price)
+                )
+                st.caption(f"₹ {predicted_price:,.0f}")
+            
+            with col2:
+                st.metric(
+                    "📊 Estimated Monthly EMI",
+                    f"₹{emi/1000:.1f}k/mo"
+                )
+                st.caption(f"₹ {emi:,.0f}")
+            
+            # Summary box
+            st.divider()
+            st.markdown("### 📋 Property Summary")
+            summary_df = pd.DataFrame({
+                "Attribute": ["City", "Locality", "Developer", "BHK", "Bathrooms", "Carpet Area", "Balconies"],
+                "Value": [
+                    selected_city,
+                    selected_locality,
+                    selected_developer,
+                    f"{bhk}",
+                    f"{bathrooms}",
+                    f"{carpet_area:,} sqft",
+                    f"{balconies}"
+                ]
+            })
+            st.dataframe(summary_df, use_container_width=True, hide_index=True)
+            
+            # Price per sqft
+            price_per_sqft = predicted_price / carpet_area
+            st.markdown(f"**📊 Price per sqft:** ₹{price_per_sqft:,.0f}")
+            
+        except Exception as e:
+            st.error(f"❌ Error during prediction: {str(e)}")
