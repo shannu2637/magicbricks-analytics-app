@@ -1,0 +1,13 @@
+model.pkl
+MagicBrick_Data.csv
+*.csv
+
+# Python
+__pycache__/
+*.pyc
+
+# Env
+venv/
+
+# Jupyter
+.ipynb_checkpoints/
